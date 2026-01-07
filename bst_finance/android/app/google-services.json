@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "49252510022",
+    "project_id": "financebst-6919d",
+    "storage_bucket": "financebst-6919d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:49252510022:android:cb7873cbeee3db5308dd47",
+        "android_client_info": {
+          "package_name": "com.frontera.bst_finance"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCRPOY780HORjWwgm1qKxQtoRTD2lqty5U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:49252510022:android:33eb43fba309fbde08dd47",
+        "android_client_info": {
+          "package_name": "com.loganes.finace"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCRPOY780HORjWwgm1qKxQtoRTD2lqty5U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
