@@ -1,0 +1,89 @@
+.
+├── assets
+│   └── logo_perusahaan.png
+├── core
+│   ├── constants
+│   │   └── app_colors.dart
+│   ├── services
+│   │   ├── fcm_service.dart
+│   │   ├── notification_service.dart
+│   │   └── pdf_report_service.dart
+│   ├── theme
+│   ├── utils
+│   │   ├── currency_formatter.dart
+│   │   └── database_seeder.dart
+│   └── widgets
+│       ├── confirmation_dialog.dart
+│       └── responsive_layout.dart
+├── features
+│   ├── approval
+│   │   ├── data
+│   │   │   └── request_repository.dart
+│   │   └── presentation
+│   │       └── approval_screen.dart
+│   ├── auth
+│   │   ├── data
+│   │   │   └── auth_service.dart
+│   │   ├── logic
+│   │   │   └── auth_cubit.dart
+│   │   └── login_screen.dart
+│   ├── dashboard
+│   │   ├── logic
+│   │   │   └── dashboard_cubit.dart
+│   │   └── presentation
+│   │       ├── dashboard_screen.dart
+│   │       ├── transaction_history_screen.dart
+│   │       └── wallet_detail_screen.dart
+│   ├── debts
+│   │   ├── data
+│   │   │   └── debt_repository.dart
+│   │   ├── domain
+│   │   │   └── debt_model.dart
+│   │   └── presentation
+│   │       ├── add_debt_screen.dart
+│   │       └── debt_list_screen.dart
+│   ├── employee
+│   │   ├── data
+│   │   │   └── employee_repository.dart
+│   │   ├── domain
+│   │   │   └── employee_model.dart
+│   │   └── presentation
+│   │       ├── add_employee_screen.dart
+│   │       └── employee_list_screen.dart
+│   ├── notification
+│   │   └── presentation
+│   │       └── notification_screen.dart
+│   ├── payroll
+│   ├── report
+│   │   ├── presentation
+│   │   │   ├── monthly_report_screen.dart
+│   │   │   └── report_screen.dart
+│   │   └── services
+│   │       ├── excel_service.dart
+│   │       ├── pdf_report_service.dart
+│   │       └── pdf_service.dart
+│   ├── settings
+│   │   ├── data
+│   │   │   └── user_repository.dart
+│   │   └── presentation
+│   │       ├── settings_screen.dart
+│   │       ├── trashbin_screen.dart
+│   │       └── user_management_screen.dart
+│   └── transactions
+│       ├── data
+│       │   └── transaction_repository.dart
+│       └── presentation
+│           ├── add_transaction_screen.dart
+│           ├── transaction_card.dart
+│           └── widgets
+│               └── transaction_card.dart
+├── main.dart
+├── models
+│   ├── employee_model.dart
+│   ├── request_model.dart
+│   ├── transaction_model.dart
+│   └── wallet_model.dart
+├── structure.txt
+└── stucture-V2.txt
+
+40 directories, 47 files

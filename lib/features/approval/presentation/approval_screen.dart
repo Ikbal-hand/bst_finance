@@ -18,7 +18,7 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  // --- 1. LOGIKA UTAMA: PROSES + KIRIM NOTIFIKASI ---
+  // --- 1. LOGIKA UTAMA: PROSES (ATOMIC TRANSACTION) ---
   Future<void> _processRequest(Map<String, dynamic> req, bool isApproved, {double? approvedAmount}) async {
     // Tampilkan Loading
     showDialog(
@@ -29,34 +29,43 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
 
     try {
       final requestRef = _firestore.collection('requests').doc(req['id']);
+      // [FIX] SUMBER DANA: Kas Bendahara Pusat (Level 2)
+      final walletRef = _firestore.collection('wallets').doc('treasurer_wallet');
+
       final user = _auth.currentUser;
 
       // Hitung Nominal
       double totalRequested = (req['amount'] ?? 0).toDouble();
+      // Jika Approved, gunakan nominal inputan (bisa sebagian). Jika Reject, 0.
       double finalAmount = isApproved ? (approvedAmount ?? totalRequested) : 0;
       double sisaUtang = totalRequested - finalAmount;
 
       await _firestore.runTransaction((tx) async {
-        // A. UPDATE STATUS REQUEST
-        tx.update(requestRef, {
-          'status': isApproved ? 'approved' : 'rejected',
-          'approved_at': FieldValue.serverTimestamp(),
-          'approver_id': user?.uid ?? 'owner',
-          'approved_amount': finalAmount,
-          'note': isApproved
-              ? (sisaUtang > 0 ? "Cair sebagian. Sisa jadi Utang." : "Disetujui Penuh.")
-              : "Permintaan ditolak.",
-        });
-
+        // A. JIKA DISETUJUI -> CEK & POTONG SALDO DULU
         if (isApproved) {
-          // B. POTONG KAS PUSAT (Expense)
+          final walletSnap = await tx.get(walletRef);
+
+          if (!walletSnap.exists) {
+            throw Exception("Dompet 'treasurer_wallet' belum dibuat! Hubungi developer.");
+          }
+
+          double currentBalance = (walletSnap.data()?['balance'] ?? 0).toDouble();
+
+          if (currentBalance < finalAmount) {
+            throw Exception("Saldo Kas Bendahara TIDAK CUKUP! (Sisa: ${NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0).format(currentBalance)})");
+          }
+
+          // 1. Potong Saldo Bendahara
+          tx.update(walletRef, {'balance': currentBalance - finalAmount});
+
+          // 2. Catat Transaksi Pengeluaran Pusat
           final newTxRef = _firestore.collection('transactions').doc();
           tx.set(newTxRef, {
             'amount': finalAmount,
             'type': 'expense',
             'category': req['category'] ?? 'Pengeluaran Cabang',
             'description': "Approval: ${req['item_name']} (${req['branch_name']})",
-            'wallet_id': 'main_cash',
+            'wallet_id': 'treasurer_wallet', // [FIX] ID Wallet Benar
             'related_branch_id': req['branch_id'],
             'date': FieldValue.serverTimestamp(),
             'user_id': user?.uid ?? 'owner',
@@ -65,7 +74,7 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
             'deleted_at': null,
           });
 
-          // C. CATAT UTANG (Jika ada sisa)
+          // 3. Catat Sisa sebagai UTANG PUSAT (Jika cair sebagian)
           if (sisaUtang > 0) {
             final newDebtRef = _firestore.collection('debts').doc();
             tx.set(newDebtRef, {
@@ -76,23 +85,33 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
               'status': 'unpaid',
               'created_at': FieldValue.serverTimestamp(),
               'type': 'payable',
-              // [BARU] Tambahkan penanda sumber agar bisa dipisah
-              'source': 'approval',
+              'source': 'approval_partial', // Penanda khusus
             });
           }
         }
 
-        // D. [PENTING] KIRIM NOTIFIKASI KE CABANG
+        // B. UPDATE STATUS REQUEST (Terakhir)
+        tx.update(requestRef, {
+          'status': isApproved ? 'approved' : 'rejected',
+          'approved_at': FieldValue.serverTimestamp(),
+          'approver_id': user?.uid ?? 'owner',
+          'approved_amount': finalAmount,
+          'note': isApproved
+              ? (sisaUtang > 0 ? "Cair sebagian (${_formatRupiah(finalAmount)}). Sisa dicatat utang." : "Disetujui Penuh.")
+              : "Permintaan ditolak.",
+        });
+
+        // C. KIRIM NOTIFIKASI KE CABANG
         final notifRef = _firestore.collection('notifications').doc();
         tx.set(notifRef, {
           'title': isApproved ? "Permintaan Disetujui" : "Permintaan Ditolak",
           'message': isApproved
-              ? "Dana Rp ${NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0).format(finalAmount)} untuk '${req['item_name']}' telah cair."
+              ? "Dana ${_formatRupiah(finalAmount)} untuk '${req['item_name']}' telah cair." + (sisaUtang > 0 ? " (Sebagian)" : "")
               : "Maaf, permintaan '${req['item_name']}' ditolak oleh Pusat.",
-          'to_branch': req['branch_id'], // Agar masuk ke HP Admin Cabang
+          'to_branch': req['branch_id'],
           'date': FieldValue.serverTimestamp(),
           'is_read': false,
-          'type': 'info',
+          'type': 'approval_result',
         });
       });
 
@@ -100,7 +119,7 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
         Navigator.pop(context); // Tutup Loading
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(isApproved ? "Berhasil diproses & Notifikasi dikirim!" : "Permintaan ditolak."),
+              content: Text(isApproved ? "Berhasil! Saldo terpotong & Notifikasi dikirim." : "Permintaan ditolak."),
               backgroundColor: isApproved ? Colors.green : Colors.red,
             )
         );
@@ -108,18 +127,19 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
     } catch (e) {
       if (mounted) {
         Navigator.pop(context); // Tutup Loading
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Gagal: $e")));
+        String errorMsg = e.toString().replaceAll("Exception:", "").trim();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errorMsg), backgroundColor: Colors.red));
       }
     }
   }
 
-  // --- 2. DIALOG APPROVAL CANGGIH (Chips + Formatter) ---
+  // --- 2. DIALOG APPROVAL (Dengan Pilihan Persentase) ---
   void _showProcessDialog(BuildContext context, Map<String, dynamic> request) {
     final double totalAmount = (request['amount'] ?? 0).toDouble();
     final nominalCtrl = TextEditingController(
         text: NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0).format(totalAmount).trim()
     );
-    final List<int> percentages = [10, 20, 30, 40, 50];
+    final List<int> percentages = [10, 25, 50, 75]; // Opsi Persen Cepat
 
     showDialog(
       context: context,
@@ -132,11 +152,10 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text("Total Diminta: Rp ${NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0).format(totalAmount)}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                    Text("Permintaan: ${_formatRupiah(totalAmount)}", style: const TextStyle(fontWeight: FontWeight.bold)),
                     const SizedBox(height: 16),
 
-                    // Quick Chips
-                    const Text("Pilih Nominal Cepat:", style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    const Text("Setujui Sebagian?", style: TextStyle(fontSize: 12, color: Colors.grey)),
                     const SizedBox(height: 8),
                     Wrap(
                       spacing: 8, runSpacing: 8,
@@ -155,8 +174,7 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
                     ),
                     const SizedBox(height: 16),
 
-                    // Input
-                    const Text("Nominal Disetujui (Cair)"),
+                    const Text("Nominal Cair (Rp)"),
                     const SizedBox(height: 5),
                     TextFormField(
                       controller: nominalCtrl,
@@ -167,7 +185,7 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
                     ),
                     const SizedBox(height: 10),
 
-                    // Info Sisa
+                    // Info Sisa (Utang)
                     Builder(builder: (c) {
                       String cleanText = nominalCtrl.text.replaceAll('.', '');
                       double inputVal = double.tryParse(cleanText) ?? 0;
@@ -181,7 +199,7 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
                           children: [
                             Icon(sisa > 0 ? Icons.info_outline : Icons.check_circle, size: 16, color: sisa > 0 ? Colors.orange : Colors.green),
                             const SizedBox(width: 8),
-                            Expanded(child: Text(sisa > 0 ? "Sisa Rp ${NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0).format(sisa)} jadi UTANG." : "Lunas / Tanpa Utang", style: TextStyle(fontSize: 11, color: sisa > 0 ? Colors.orange.shade900 : Colors.green.shade900))),
+                            Expanded(child: Text(sisa > 0 ? "Sisa ${_formatRupiah(sisa)} akan dicatat sebagai UTANG." : "Disetujui Penuh (Lunas).", style: TextStyle(fontSize: 11, color: sisa > 0 ? Colors.orange.shade900 : Colors.green.shade900))),
                           ],
                         ),
                       );
@@ -203,7 +221,7 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
                     Navigator.pop(ctx);
                     _processRequest(request, true, approvedAmount: finalAmount);
                   },
-                  child: const Text("Proses"),
+                  child: const Text("Cairkan Dana"),
                 ),
               ],
             );
@@ -212,14 +230,14 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
     );
   }
 
-  // --- 3. UI UTAMA (TABS: PENDING & HISTORY) ---
+  // --- 3. UI UTAMA (LIST REQUEST) ---
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 2, // Dua Tab
+      length: 2,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text("Persetujuan (Approval)", style: TextStyle(color: Colors.black)),
+          title: const Text("Persetujuan", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
           backgroundColor: Colors.white,
           iconTheme: const IconThemeData(color: Colors.black),
           elevation: 0,
@@ -228,30 +246,27 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
             unselectedLabelColor: Colors.grey,
             indicatorColor: AppColors.primary,
             tabs: [
-              Tab(text: "Perlu Persetujuan"),
+              Tab(text: "Menunggu"),
               Tab(text: "Riwayat"),
             ],
           ),
         ),
         body: TabBarView(
           children: [
-            _buildRequestList(isHistory: false), // Tab 1
-            _buildRequestList(isHistory: true),  // Tab 2
+            _buildRequestList(isHistory: false),
+            _buildRequestList(isHistory: true),
           ],
         ),
       ),
     );
   }
 
-  // Widget List Reusable (Bisa untuk Pending / History)
   Widget _buildRequestList({required bool isHistory}) {
     Query query = _firestore.collection('requests').orderBy('created_at', descending: true);
 
     if (isHistory) {
-      // Ambil yang SUDAH di-approve atau di-reject
       query = query.where('status', whereIn: ['approved', 'rejected']);
     } else {
-      // Ambil yang MASIH pending
       query = query.where('status', isEqualTo: 'pending');
     }
 
@@ -267,13 +282,13 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(
-                    isHistory ? Icons.history : Icons.check_circle_outline,
-                    size: 80,
+                    isHistory ? Icons.history : Icons.inbox,
+                    size: 60,
                     color: Colors.grey[300]
                 ),
                 const SizedBox(height: 16),
                 Text(
-                    isHistory ? "Belum ada riwayat" : "Semua permintaan sudah diproses",
+                    isHistory ? "Belum ada riwayat" : "Tidak ada permintaan baru",
                     style: const TextStyle(color: Colors.grey)
                 ),
               ],
@@ -317,12 +332,12 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
               children: [
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(color: Colors.blue.shade100, borderRadius: BorderRadius.circular(4)),
-                  child: Text(data['branch_name'] ?? 'Cabang', style: TextStyle(fontSize: 10, color: Colors.blue.shade800, fontWeight: FontWeight.bold)),
+                  decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(6)),
+                  child: Text(data['branch_name'] ?? 'Cabang', style: TextStyle(fontSize: 11, color: Colors.blue.shade800, fontWeight: FontWeight.bold)),
                 ),
                 Text(
                   data['created_at'] != null ? DateFormat('dd MMM HH:mm').format((data['created_at'] as Timestamp).toDate()) : '-',
-                  style: const TextStyle(fontSize: 10, color: Colors.grey),
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
                 ),
               ],
             ),
@@ -330,18 +345,20 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
 
             // Item & Harga
             Text(data['item_name'] ?? '-', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-            Text("Kategori: ${data['category'] ?? '-'}", style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            Text(data['description'] ?? '-', style: const TextStyle(fontSize: 12, color: Colors.black54)), // Deskripsi detail item (Qty dll)
 
             const SizedBox(height: 12),
+            const Divider(),
+
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text("Diminta:", style: TextStyle(fontSize: 10, color: Colors.grey)),
+                    const Text("Total Diminta:", style: TextStyle(fontSize: 10, color: Colors.grey)),
                     Text(
-                      NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0).format(data['amount'] ?? 0),
+                      _formatRupiah((data['amount'] ?? 0).toDouble()),
                       style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
                     ),
                   ],
@@ -351,9 +368,9 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      const Text("Disetujui (Cair):", style: TextStyle(fontSize: 10, color: Colors.green)),
+                      const Text("Cair:", style: TextStyle(fontSize: 10, color: Colors.green)),
                       Text(
-                        NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0).format(data['approved_amount'] ?? 0),
+                        _formatRupiah((data['approved_amount'] ?? 0).toDouble()),
                         style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.green),
                       ),
                     ],
@@ -361,16 +378,18 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
               ],
             ),
 
-            if (data['note'] != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text("Note: ${data['note']}", style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: Colors.grey)),
+            if (data['note'] != null && data['note'].toString().isNotEmpty)
+              Container(
+                margin: const EdgeInsets.only(top: 10),
+                padding: const EdgeInsets.all(8),
+                width: double.infinity,
+                decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(8)),
+                child: Text("Catatan: ${data['note']}", style: const TextStyle(fontSize: 11, fontStyle: FontStyle.italic, color: Colors.black87)),
               ),
 
-            const Divider(height: 24),
-
             // FOOTER: Tombol (Jika Pending) ATAU Status (Jika History)
-            if (!isHistory)
+            if (!isHistory) ...[
+              const SizedBox(height: 16),
               Row(
                 children: [
                   Expanded(
@@ -385,34 +404,34 @@ class _ApprovalScreenState extends State<ApprovalScreen> {
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
                       onPressed: () => _showProcessDialog(context, data),
-                      child: const Text("Setujui"),
+                      child: const Text("Proses"),
                     ),
                   ),
                 ],
               )
-            else
-            // Tampilan Status di Tab History
+            ] else ...[
+              const SizedBox(height: 12),
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 8),
+                padding: const EdgeInsets.symmetric(vertical: 6),
                 decoration: BoxDecoration(
-                  color: isApproved ? Colors.green.shade50 : Colors.red.shade50,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: isApproved ? Colors.green : Colors.red),
+                  color: isApproved ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: isApproved ? Colors.green : Colors.red, width: 0.5),
                 ),
                 child: Center(
                   child: Text(
-                    isApproved ? "✅ SUDAH DISETUJUI" : "❌ DITOLAK",
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: isApproved ? Colors.green.shade700 : Colors.red.shade700
-                    ),
+                    isApproved ? "DISETUJUI" : "DITOLAK",
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: isApproved ? Colors.green[800] : Colors.red[800]),
                   ),
                 ),
               ),
+            ]
           ],
         ),
       ),
     );
   }
+
+  String _formatRupiah(double amount) => NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0).format(amount);
 }
