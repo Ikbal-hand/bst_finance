@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import '../../core/constants/app_colors.dart';
-import '../../core/widgets/responsive_layout.dart';
+import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+// [FIX IMPORT PATH] Sesuaikan dengan struktur folder Anda
 import '../dashboard/presentation/dashboard_screen.dart';
-import 'logic/auth_cubit.dart'; // Pastikan path ini benar sesuai folder Anda
+import 'logic/auth_cubit.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -13,223 +15,109 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  // Controller untuk mengambil teks inputan
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-
-  // Variable untuk menyembunyikan password
   bool _isObscure = true;
-  // GlobalKey untuk validasi form (misal: email kosong)
-  final _formKey = GlobalKey<FormState>();
+  bool _rememberMe = false;
 
   @override
-  void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    _loadSavedCredentials();
+  }
+
+  void _loadSavedCredentials() async {
+    final prefs = await SharedPreferences.getInstance();
+    String? savedEmail = prefs.getString('saved_email');
+    if (savedEmail != null) {
+      setState(() {
+        _emailController.text = savedEmail;
+        _rememberMe = true;
+      });
+    }
+  }
+
+  void _login() async {
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
+
+    if (email.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Email dan Password wajib diisi")));
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    if (_rememberMe) {
+      await prefs.setString('saved_email', email);
+    } else {
+      await prefs.remove('saved_email');
+    }
+
+    if (mounted) {
+      context.read<AuthCubit>().login(email, password);
+    }
+    TextInput.finishAutofillContext();
   }
 
   @override
   Widget build(BuildContext context) {
-    // BlocConsumer: Pendengar setia perubahan state (Loading/Sukses/Gagal)
-    return BlocConsumer<AuthCubit, AuthState>(
-      listener: (context, state) {
-        if (state is AuthSuccess) {
-          // 1. Tampilkan Pesan Sukses
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Login Berhasil! Mengalihkan..."),
-              backgroundColor: AppColors.success,
-              duration: Duration(seconds: 1), // Persingkat durasi
-            ),
-          );
-
-          // 2. Tunggu sebentar (opsional) lalu Pindah Halaman
-          Future.delayed(const Duration(seconds: 1), () {
-            // Import file dashboard dulu di paling atas:
-            // import '../../dashboard/presentation/dashboard_screen.dart';
-
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(builder: (context) => const DashboardScreen()),
-            );
-          });
-        } else if (state is AuthFailure) {
-          // Tampilkan pesan error jika gagal
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(state.message),
-              backgroundColor: AppColors.error,
-            ),
-          );
-        }
-      },
-      builder: (context, state) {
-        // Tampilan Utama
-        return Scaffold(
-          backgroundColor: Colors.white,
-          body: ResponsiveLayout(
-            // Tampilan HP
-            mobileBody: _buildLoginForm(context, state, isTablet: false),
-            // Tampilan Tablet (Card di tengah)
-            tabletBody: Center(
-              child: SizedBox(
-                width: 500,
-                child: Card(
-                  elevation: 5,
-                  shadowColor: AppColors.primary.withOpacity(0.2),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20)
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: BlocListener<AuthCubit, AuthState>(
+        listener: (context, state) {
+          if (state is AuthSuccess) {
+            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
+          } else if (state is AuthFailure) {
+            // [FIX ERROR PROPERTY] Gunakan state.message
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(state.message), backgroundColor: Colors.red));
+          }
+        },
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: AutofillGroup(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.account_balance_wallet, size: 80, color: Colors.blue),
+                  const SizedBox(height: 20),
+                  const Text("BST FINANCE", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 40),
+                  TextField(
+                    controller: _emailController,
+                    keyboardType: TextInputType.emailAddress,
+                    autofillHints: const [AutofillHints.email],
+                    decoration: InputDecoration(labelText: "Email", border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
                   ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(40.0),
-                    child: _buildLoginForm(context, state, isTablet: true),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildLoginForm(BuildContext context, AuthState state, {required bool isTablet}) {
-    // Cek apakah sedang loading
-    final isLoading = state is AuthLoading;
-
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
-      child: Center(
-        child: SingleChildScrollView(
-          child: Form(
-            key: _formKey,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // 1. HEADER (Logo & Judul)
-                Icon(
-                    Icons.account_balance_wallet_rounded,
-                    size: isTablet ? 100 : 80,
-                    color: AppColors.primary
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  "BST FINANCE",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: isTablet ? 28 : 24,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.primary,
-                    letterSpacing: 1.5,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  "Sistem Keuangan Multi cabang",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey[600]),
-                ),
-                const SizedBox(height: 40),
-
-                // 2. INPUT EMAIL
-                TextFormField(
-                  controller: _emailController,
-                  keyboardType: TextInputType.emailAddress,
-                  enabled: !isLoading, // Matikan input jika sedang loading
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Email wajib diisi';
-                    }
-                    if (!value.contains('@')) {
-                      return 'Format email tidak valid';
-                    }
-                    return null;
-                  },
-                  decoration: InputDecoration(
-                    labelText: "Email Perusahaan",
-                    prefixIcon: const Icon(Icons.email_outlined),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _passwordController,
+                    obscureText: _isObscure,
+                    autofillHints: const [AutofillHints.password],
+                    decoration: InputDecoration(
+                      labelText: "Password",
+                      suffixIcon: IconButton(icon: Icon(_isObscure ? Icons.visibility_off : Icons.visibility), onPressed: () => setState(() => _isObscure = !_isObscure)),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                     ),
-                    filled: true,
-                    fillColor: Colors.grey[50],
+                    onEditingComplete: _login,
                   ),
-                ),
-                const SizedBox(height: 16),
-
-                // 3. INPUT PASSWORD
-                TextFormField(
-                  controller: _passwordController,
-                  obscureText: _isObscure,
-                  enabled: !isLoading,
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Password wajib diisi';
-                    }
-                    return null;
-                  },
-                  decoration: InputDecoration(
-                    labelText: "Password",
-                    prefixIcon: const Icon(Icons.lock_outline),
-                    suffixIcon: IconButton(
-                      icon: Icon(_isObscure ? Icons.visibility : Icons.visibility_off),
-                      onPressed: () {
-                        setState(() {
-                          _isObscure = !_isObscure;
-                        });
+                  Row(children: [Checkbox(value: _rememberMe, onChanged: (val) => setState(() => _rememberMe = val!)), const Text("Ingat Email Saya")]),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: BlocBuilder<AuthCubit, AuthState>(
+                      builder: (context, state) {
+                        return ElevatedButton(
+                          onPressed: (state is AuthLoading) ? null : _login,
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[800]),
+                          child: (state is AuthLoading) ? const CircularProgressIndicator(color: Colors.white) : const Text("MASUK", style: TextStyle(color: Colors.white)),
+                        );
                       },
                     ),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    filled: true,
-                    fillColor: Colors.grey[50],
                   ),
-                ),
-                const SizedBox(height: 24),
-
-                // 4. TOMBOL LOGIN (Dengan Loading State)
-                SizedBox(
-                  height: 50,
-                  child: ElevatedButton(
-                    onPressed: isLoading
-                        ? null // Matikan tombol jika loading
-                        : () {
-                      // Jalankan validasi form dulu
-                      if (_formKey.currentState!.validate()) {
-                        // Panggil Cubit untuk Login
-                        context.read<AuthCubit>().login(
-                          _emailController.text.trim(),
-                          _passwordController.text.trim(),
-                        );
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      elevation: 2,
-                    ),
-                    child: isLoading
-                        ? const SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(
-                          color: Colors.white,
-                          strokeWidth: 2
-                      ),
-                    )
-                        : const Text(
-                      "Log In",
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),

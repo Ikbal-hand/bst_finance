@@ -78,6 +78,7 @@ class DashboardCubit extends Cubit<DashboardState> {
     emit(DashboardLoading());
 
     // 1. Pantau Dompet
+    _walletSub?.cancel();
     _walletSub = _firestore.collection('wallets').snapshots().listen((walletSnap) {
       _fetchRestOfData(walletSnap);
     }, onError: (e) => emit(DashboardError(e.toString())));
@@ -85,9 +86,11 @@ class DashboardCubit extends Cubit<DashboardState> {
 
   void _fetchRestOfData(QuerySnapshot walletSnap) {
     try {
-      final wallets = walletSnap.docs
-          .map((doc) => WalletModel.fromMap(doc.data() as Map<String, dynamic>, doc.id))
-          .toList();
+      final wallets = walletSnap.docs.map((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        return WalletModel.fromMap(data, doc.id);
+      }).toList();
+
       double totalAssets = wallets.fold(0, (sum, w) => sum + w.balance);
 
       // 2. Pantau Transaksi
@@ -98,32 +101,32 @@ class DashboardCubit extends Cubit<DashboardState> {
           .snapshots()
           .listen((txSnap) {
         try {
-          // [FIX UTAMA DI SINI]
-          // Kita filter data: Hanya ambil yang deletedAt-nya NULL (belum dihapus)
-          final transactions = txSnap.docs
-              .map((doc) => TransactionModel.fromMap(doc.data() as Map<String, dynamic>, doc.id))
-              .where((tx) => tx.deletedAt == null) // <--- INI VALIDASI NYA
-              .toList();
+          // Filter data: Hanya ambil yang deletedAt-nya NULL
+          final transactions = txSnap.docs.map((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            return TransactionModel.fromMap(data, doc.id);
+          }).where((tx) => tx.deletedAt == null).toList();
 
-          // Data 'transactions' di atas sudah bersih, jadi grafik aman
+          // Data 'transactions' di atas sudah bersih
           final chartData = _calculateWeeklySummary(transactions);
 
           // 3. Pantau Utang
           _debtSub?.cancel();
           _debtSub = _firestore.collection('debts').snapshots().listen((debtSnap) {
             final allDebts = debtSnap.docs.map((d) {
-              var data = d.data();
+              final data = d.data() as Map<String, dynamic>;
               data['id'] = d.id;
               return data;
             }).toList();
 
             double totalDebt = allDebts.fold(0.0, (sum, item) => sum + (item['amount'] ?? 0));
 
+            // Emit Loaded State
             emit(DashboardLoaded(
               wallets: wallets,
               totalAssets: totalAssets,
-              recentTransactions: transactions, // List ini sudah bersih dari sampah
-              weeklyChartData: chartData,       // Grafik ini juga sudah bersih
+              recentTransactions: transactions,
+              weeklyChartData: chartData,
               totalDebt: totalDebt,
               allDebts: allDebts,
             ));
@@ -165,22 +168,24 @@ class DashboardCubit extends Cubit<DashboardState> {
     return summary;
   }
 
-  Future<void> deleteTransaction(String id) async {
+  // [FIX] Terima Object TransactionModel (Smart Delete)
+  Future<void> deleteTransaction(TransactionModel transaction) async {
     try {
-      await _transactionRepository.deleteTransaction(id);
+      await _transactionRepository.deleteTransaction(transaction);
       emit(DashboardSuccess("Transaksi dihapus & Saldo dikembalikan"));
-      startMonitoring();
+      startMonitoring(); // Refresh data
     } catch (e) {
       emit(DashboardError("Gagal menghapus: $e"));
       startMonitoring();
     }
   }
 
-  Future<void> restoreTransaction(String id) async {
+  // [FIX] Terima Object TransactionModel (Restore)
+  Future<void> restoreTransaction(TransactionModel transaction) async {
     try {
-      await _transactionRepository.restoreTransaction(id);
+      await _transactionRepository.restoreTransaction(transaction);
       emit(DashboardSuccess("Transaksi berhasil dipulihkan (Restore)!"));
-      startMonitoring();
+      startMonitoring(); // Refresh data
     } catch (e) {
       emit(DashboardError("Gagal restore: $e"));
       startMonitoring();

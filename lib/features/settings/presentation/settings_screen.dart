@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/utils/database_seeder.dart'; // [IMPORT SEEDER]
+import '../../../dummy_data_generator.dart';
 import '../../auth/login_screen.dart';
 import 'trashbin_screen.dart';
 
@@ -58,27 +59,87 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
-
-  void _handleGenerateDummy() {
-    showDialog(
+  Future<void> _handleGenerateDummy() async {
+    // 1. Tampilkan Dialog Konfirmasi (Agar tidak terpencet tidak sengaja)
+    bool confirm = await showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Generate Dummy Data"),
-        content: const Text("Akan membuat:\n- 5 Pegawai\n- 3 Utang\n- Saldo Kas Pusat Rp 50 Juta\n\nGunakan fitur ini saat data kosong."),
+      builder: (context) => AlertDialog(
+        title: const Text("Generate Data Dummy?"),
+        content: const Text(
+            "Sistem akan membuat puluhan transaksi simulasi (Rasional) dari tanggal 1-30 bulan ini.\n\n"
+                "Data mencakup:\n"
+                "• Penjualan Harian (Box, Alfa, Saufa)\n"
+                "• Pengeluaran Operasional (Makan, Bensin)\n"
+                "• Project Besar & Belanja Stok\n"
+                "• Gaji Karyawan"
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Batal")),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("Batal", style: TextStyle(color: Colors.grey)),
+          ),
           ElevatedButton(
-            onPressed: () async {
-              Navigator.pop(ctx);
-              _performAction(() => DatabaseSeeder().seedDummyData(), "Dummy Data Berhasil Dibuat!");
-            },
-            child: const Text("Generate Sekarang"),
-          )
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            child: const Text("Ya, Gas Pol!"),
+          ),
         ],
       ),
-    );
-  }
+    ) ?? false;
 
+    if (!confirm) return;
+
+    // 2. Tampilkan Loading (Block UI)
+    if (mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: Card(
+            child: Padding(
+              padding: EdgeInsets.all(20.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 20),
+                  Text("Sedang meracik data..."),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    try {
+      // 3. PANGGIL GENERATOR
+      await DummyDataGenerator().generateRationalData();
+
+      // 4. Sukses
+      if (mounted) {
+        Navigator.pop(context); // Tutup Loading
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("✅ Data Dummy Berhasil Dibuat! Silakan cek Laporan."),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      // 5. Gagal
+      if (mounted) {
+        Navigator.pop(context); // Tutup Loading
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Gagal generate data: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
   Future<void> _performAction(Future<void> Function() action, String successMsg) async {
     setState(() => _isLoading = true);
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Sedang memproses...")));

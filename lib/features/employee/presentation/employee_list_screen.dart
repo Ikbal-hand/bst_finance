@@ -318,7 +318,7 @@ class EmployeeListScreen extends StatelessWidget {
                   walletId: 'main_cash',
                   date: DateTime.now(),
                   userId: user.uid,
-                  relatedBranchId: employee.branchId,
+                  relatedBranchId: employee.branchId, createdAt: DateTime.now(),
                 );
 
                 await TransactionRepository().addTransaction(newTx);

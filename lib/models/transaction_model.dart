@@ -9,12 +9,16 @@ class TransactionModel {
   final String walletId;
   final DateTime date;
   final String userId;
-  final String? relatedBranchId;
 
-  // [FIELD BARU UNTUK FITUR DELETE & REVERSE]
-  final DateTime? deletedAt; // Jika tidak null, berarti ada di trashbin
-  final String? relatedId;   // ID Pegawai (jika gaji) atau ID Utang (jika bayar utang)
-  final String? relatedType; // 'employee', 'debt_payment', 'general'
+  // Field Opsional / Tambahan
+  final String? relatedBranchId;
+  final String? relatedId; // ID Utang / Request
+  final String? relatedType; // 'debt_payment', 'request_approval'
+  final DateTime? deletedAt;
+
+  // [FIX] Field Baru yang Menyebabkan Error
+  final String status; // 'success', 'pending', 'deleted'
+  final DateTime createdAt;
 
   TransactionModel({
     required this.id,
@@ -26,10 +30,33 @@ class TransactionModel {
     required this.date,
     required this.userId,
     this.relatedBranchId,
-    this.deletedAt,
     this.relatedId,
     this.relatedType,
+    this.deletedAt,
+    // Default value agar aman
+    this.status = 'success',
+    required this.createdAt,
   });
+
+  factory TransactionModel.fromMap(Map<String, dynamic> map, String id) {
+    return TransactionModel(
+      id: id,
+      amount: (map['amount'] ?? 0).toDouble(),
+      type: map['type'] ?? 'expense',
+      category: map['category'] ?? 'Umum',
+      description: map['description'] ?? '',
+      walletId: map['wallet_id'] ?? '',
+      date: (map['date'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      userId: map['user_id'] ?? '',
+      relatedBranchId: map['related_branch_id'],
+      relatedId: map['related_id'],
+      relatedType: map['related_type'],
+      deletedAt: (map['deleted_at'] as Timestamp?)?.toDate(),
+      // [FIX] Mapping Field Baru
+      status: map['status'] ?? 'success',
+      createdAt: (map['created_at'] as Timestamp?)?.toDate() ?? DateTime.now(),
+    );
+  }
 
   Map<String, dynamic> toMap() {
     return {
@@ -41,26 +68,12 @@ class TransactionModel {
       'date': Timestamp.fromDate(date),
       'user_id': userId,
       'related_branch_id': relatedBranchId,
-      'deleted_at': deletedAt != null ? Timestamp.fromDate(deletedAt!) : null,
       'related_id': relatedId,
       'related_type': relatedType,
+      'deleted_at': deletedAt != null ? Timestamp.fromDate(deletedAt!) : null,
+      // [FIX] Simpan Field Baru
+      'status': status,
+      'created_at': Timestamp.fromDate(createdAt),
     };
-  }
-
-  factory TransactionModel.fromMap(Map<String, dynamic> map, String id) {
-    return TransactionModel(
-      id: id,
-      amount: (map['amount'] ?? 0).toDouble(),
-      type: map['type'] ?? 'expense',
-      category: map['category'] ?? 'Umum',
-      description: map['description'] ?? '',
-      walletId: map['wallet_id'] ?? '',
-      date: (map['date'] as Timestamp).toDate(),
-      userId: map['user_id'] ?? '',
-      relatedBranchId: map['related_branch_id'],
-      deletedAt: map['deleted_at'] != null ? (map['deleted_at'] as Timestamp).toDate() : null,
-      relatedId: map['related_id'],
-      relatedType: map['related_type'],
-    );
   }
 }

@@ -614,36 +614,120 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _buildErrorHeader() {
     return Container(width: double.infinity, padding: const EdgeInsets.all(24), decoration: BoxDecoration(color: Colors.grey, borderRadius: BorderRadius.circular(24)), child: const Text("Akses tidak valid.", style: TextStyle(color: Colors.white)));
   }
+  // Tambahkan fungsi ini di dalam class _DashboardScreenState
+  String _getBranchName(String? branchId) {
+    if (branchId == null) return 'Pusat';
+    switch (branchId) {
+      case 'bst_box': return 'Box Factory';
+      case 'm_alfa': return 'Maint. Alfa';
+      case 'saufa': return 'Saufa Olshop';
+      case 'pusat': return 'Kantor Pusat';
+      default: return 'Cabang Lain';
+    }
+  }
 
   Widget _buildDrawer(BuildContext context) {
-    return Drawer(child: ListView(padding: EdgeInsets.zero, children: [
-      UserAccountsDrawerHeader(decoration: const BoxDecoration(color: AppColors.primary), accountName: Text(_userRole == 'owner' ? "Owner / Pusat" : "Admin Cabang"), accountEmail: const Text("bst-finance.com"), currentAccountPicture: const CircleAvatar(backgroundColor: Colors.white, child: Icon(Icons.person, color: AppColors.primary))),
-      ListTile(leading: const Icon(Icons.dashboard), title: const Text('Dashboard'), onTap: () => Navigator.pop(context)),
-      ListTile(
-          leading: const Icon(Icons.people),
-          title: const Text('Manajemen Pegawai'),
-          onTap: () {
-            Navigator.pop(context);
-            Navigator.push(context, MaterialPageRoute(builder: (c) => EmployeeListScreen(branchId: _userBranchId)));
-          }
+    return Drawer(
+      child: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          // --- HEADER USER ---
+          UserAccountsDrawerHeader(
+            decoration: const BoxDecoration(color: AppColors.primary),
+            accountName: Text(_userRole == 'owner' ? "Owner / Pusat" : "Admin Cabang"),
+            accountEmail: Text(_userRole == 'owner' ? "Pusat Control" : _getBranchName(_userBranchId)),
+            currentAccountPicture: CircleAvatar(
+              backgroundColor: Colors.white,
+              child: Icon(
+                _userRole == 'owner' ? Icons.admin_panel_settings : Icons.person,
+                color: AppColors.primary,
+                size: 32,
+              ),
+            ),
+          ),
+
+          // --- MENU UTAMA ---
+          ListTile(
+            leading: const Icon(Icons.dashboard),
+            title: const Text('Dashboard'),
+            onTap: () => Navigator.pop(context),
+          ),
+
+          ListTile(
+            leading: const Icon(Icons.analytics_outlined, color: Colors.blue),
+            title: const Text("Laporan Keuangan"),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const ReportScreen())
+              );
+            },
+          ),
+
+          ListTile(
+            leading: const Icon(Icons.monetization_on_outlined, color: Colors.redAccent),
+            title: const Text('Utang Usaha'),
+            onTap: () {
+              Navigator.pop(context);
+              // Jika Owner: Lihat utang sesuai filter dashboard.
+              // Jika Admin: Lihat utang cabang sendiri.
+              String targetBranch = _userRole == 'owner' ? _selectedBranchId : _userBranchId;
+              Navigator.push(context, MaterialPageRoute(builder: (c) => DebtListScreen(branchId: targetBranch)));
+            },
+          ),
+
+          ListTile(
+            leading: const Icon(Icons.people_outline),
+            title: const Text('Manajemen Pegawai'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(context, MaterialPageRoute(builder: (c) => EmployeeListScreen(branchId: _userBranchId)));
+            },
+          ),
+
+          // --- MENU KHUSUS OWNER ---
+          if (_userRole == 'owner') ...[
+            const Divider(thickness: 1),
+            const Padding(
+              padding: EdgeInsets.only(left: 16, top: 8, bottom: 8),
+              child: Text("Menu Owner", style: TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.bold)),
+            ),
+
+            ListTile(
+              leading: const Icon(Icons.verified_user, color: Colors.green),
+              title: const Text('Persetujuan (Approval)'),
+              trailing: const Icon(Icons.chevron_right, size: 16),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (c) => const ApprovalScreen()));
+              },
+            ),
+
+            ListTile(
+              leading: const Icon(Icons.manage_accounts, color: Colors.purple),
+              title: const Text('Manajemen User Akses'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (c) => const UserManagementScreen()));
+              },
+            ),
+          ],
+
+          const Divider(thickness: 1),
+
+          // --- PENGATURAN ---
+          ListTile(
+            leading: const Icon(Icons.settings),
+            title: const Text('Pengaturan'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(context, MaterialPageRoute(builder: (c) => const SettingsScreen()));
+            },
+          ),
+        ],
       ),
-      if (_userRole == 'owner')
-        ListTile(
-          leading: const Icon(Icons.manage_accounts),
-          title: const Text('Manajemen User Akses'),
-          onTap: () { Navigator.pop(context); Navigator.push(context, MaterialPageRoute(builder: (c) => const UserManagementScreen())); },
-        ),
-      ListTile(
-        leading: const Icon(Icons.monetization_on_outlined),
-        title: const Text('Utang Usaha'),
-        onTap: () {
-          Navigator.pop(context);
-          Navigator.push(context, MaterialPageRoute(builder: (c) => DebtListScreen(branchId: _selectedBranchId)));
-        },
-      ),
-      if (_userRole == 'owner') ListTile(leading: const Icon(Icons.verified_user), title: const Text('Persetujuan (Approval)'), onTap: () { Navigator.pop(context); Navigator.push(context, MaterialPageRoute(builder: (c) => const ApprovalScreen())); }),
-      ListTile(leading: const Icon(Icons.settings), title: const Text('Pengaturan'), onTap: () { Navigator.pop(context); Navigator.push(context, MaterialPageRoute(builder: (c) => const SettingsScreen())); })
-    ]));
+    );
   }
 
   Widget _buildCustomTabBar() {

@@ -63,18 +63,25 @@ class _NotificationScreenState extends State<NotificationScreen> with SingleTick
         controller: _tabController,
         children: [
           _buildNotificationList(),
-          _buildDebtReminderList(),
         ],
       ),
     );
   }
 
   // --- TAB 1: LIST NOTIFIKASI UMUM ---
+// --- TAB 1: LIST NOTIFIKASI UMUM ---
   Widget _buildNotificationList() {
+    // [FIX KRITIKAL]
+    // Jika user login sebagai 'owner' (ID: owner), dia harus baca notifikasi tujuan 'pusat'.
+    // Jika user login sebagai admin cabang (ID: bst_box), dia baca notifikasi tujuan 'bst_box'.
+
+    final String targetBranch = widget.branchId == 'owner' ? 'pusat' : widget.branchId;
+
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('notifications')
-          .where('to_branch', whereIn: [widget.branchId, 'all'])
+      // [FIX] Gunakan targetBranch yang sudah dilogika di atas
+          .where('to_branch', whereIn: [targetBranch, 'all'])
           .orderBy('date', descending: true)
           .limit(50)
           .snapshots(),
@@ -93,12 +100,10 @@ class _NotificationScreenState extends State<NotificationScreen> with SingleTick
           itemBuilder: (context, index) {
             final data = docs[index].data() as Map<String, dynamic>;
 
-            // [FIX CRASH] Safe parsing untuk Timestamp
-            DateTime date;
+            // Safe Date Parsing
+            DateTime date = DateTime.now();
             if (data['date'] != null) {
               date = (data['date'] as Timestamp).toDate();
-            } else {
-              date = DateTime.now();
             }
 
             return ListTile(
@@ -115,7 +120,6 @@ class _NotificationScreenState extends State<NotificationScreen> with SingleTick
                   Text(DateFormat('dd MMM HH:mm').format(date), style: const TextStyle(fontSize: 10, color: Colors.grey)),
                 ],
               ),
-              isThreeLine: true,
             );
           },
         );
@@ -124,83 +128,4 @@ class _NotificationScreenState extends State<NotificationScreen> with SingleTick
   }
 
   // --- TAB 2: LIST JATUH TEMPO (FIX ERROR NULL) ---
-  Widget _buildDebtReminderList() {
-    // Ambil utang yang belum lunas
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('debts')
-          .where('branch_id', isEqualTo: widget.branchId == 'owner' ? 'pusat' : widget.branchId) // Sesuaikan logika owner
-          .where('status', isEqualTo: 'unpaid')
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        if (!snapshot.hasData) return const Center(child: Text("Data tidak ditemukan"));
-
-        // Filter Manual untuk H-3 di sisi Client (Lebih fleksibel)
-        final now = DateTime.now();
-        final today = DateTime(now.year, now.month, now.day);
-
-        final dueDebts = snapshot.data!.docs.where((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-
-          // [FIX CRASH DISINI] Handle jika created_at NULL
-          Timestamp? ts = data['created_at'];
-          DateTime createdAt = ts != null ? ts.toDate() : DateTime.now(); // Default ke NOW jika null
-
-          DateTime dueDate = createdAt.add(const Duration(days: 30)); // Asumsi tempo 30 hari
-          DateTime dueDateDate = DateTime(dueDate.year, dueDate.month, dueDate.day);
-
-          int daysLeft = dueDateDate.difference(today).inDays;
-
-          // Tampilkan jika H-3 sampai Terlewat (Minus)
-          return daysLeft <= 3;
-        }).toList();
-
-        if (dueDebts.isEmpty) {
-          return const Center(child: Text("Tidak ada tagihan yang mendekati jatuh tempo."));
-        }
-
-        return ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: dueDebts.length,
-          itemBuilder: (context, index) {
-            final data = dueDebts[index].data() as Map<String, dynamic>;
-            final debtId = dueDebts[index].id;
-
-            // Parsing Ulang untuk Tampilan
-            Timestamp? ts = data['created_at'];
-            DateTime createdAt = ts != null ? ts.toDate() : DateTime.now();
-            DateTime dueDate = createdAt.add(const Duration(days: 30));
-            int daysLeft = DateTime(dueDate.year, dueDate.month, dueDate.day).difference(today).inDays;
-
-            Color statusColor = daysLeft < 0 ? Colors.red : Colors.orange;
-            String statusText = daysLeft < 0 ? "Telat ${daysLeft.abs()} Hari" : "$daysLeft Hari Lagi";
-
-            return Card(
-              margin: const EdgeInsets.only(bottom: 12),
-              child: ListTile(
-                leading: const Icon(Icons.warning_amber_rounded, color: Colors.red, size: 32),
-                title: Text(data['name'] ?? 'Utang', style: const TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text("Nominal: Rp ${(data['amount'] ?? 0)}\nJatuh Tempo: ${DateFormat('dd MMM yyyy').format(dueDate)}"),
-                trailing: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(color: statusColor.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
-                  child: Text(statusText, style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 12)),
-                ),
-                onTap: () {
-                  // Navigasi ke Detail Utang
-                  Navigator.push(context, MaterialPageRoute(
-                      builder: (c) => DebtListScreen(branchId: widget.branchId)
-                  ));
-                },
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
 }

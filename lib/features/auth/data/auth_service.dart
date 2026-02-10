@@ -15,8 +15,7 @@ class AuthService {
       } else if (e.code == 'wrong-password') {
         throw Exception('Password salah.');
       } else {
-        // Tampilkan kode error asli dari Firebase agar kita tahu penyebabnya
-        throw Exception('Gagal: ${e.code} - ${e.message}');
+        throw Exception('Terjadi kesalahan: ${e.message}');
       }
     } catch (e) {
       // INI BAGIAN PENTING: Print error asli ke layar Debug Console
