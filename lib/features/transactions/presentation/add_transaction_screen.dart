@@ -77,11 +77,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     final tx = widget.transactionToEdit!;
     _isIncome = tx.type == 'income';
     _selectedCategory = tx.category;
-    // Cek apakah kategori ada di list default, jika tidak masuk ke "Lainnya" atau custom
-    if (!_incomeCategories.contains(tx.category) && !_expenseCategories.contains(tx.category)) {
-      // Logic sederhana: jika kategori custom, bisa dimasukkan ke logic lain
-      // Disini kita asumsi kategori sesuai list atau masuk Lainnya
-    }
 
     _selectedWalletId = tx.walletId;
     _selectedBranchId = tx.relatedBranchId;
@@ -118,6 +113,10 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           if (widget.transactionToEdit == null) {
             if (_userRole == 'owner') {
               _selectedBranchId = widget.branchId ?? 'bst_box';
+              // [FITUR BARU] Tambahkan Suntikan Modal hanya untuk Owner
+              if (!_incomeCategories.contains('Suntikan Modal')) {
+                _incomeCategories.insert(0, 'Suntikan Modal');
+              }
             } else {
               _selectedBranchId = _userBranchId;
             }
@@ -129,17 +128,22 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     }
   }
 
-  void _updateAutoWalletLogic() {
-    // Jangan ubah wallet otomatis jika sedang Edit (kecuali user ganti kategori/cabang sengaja)
-    // Tapi untuk keamanan data lama, kita biarkan user manual atau logic ini berjalan jika kategori berubah.
-    // Disini kita jalankan logic standard.
+  // --- LOGIC UTAMA ---
 
+  void _updateAutoWalletLogic() {
+    // Jangan ubah wallet otomatis jika sedang Edit
+    if (widget.transactionToEdit != null) return;
     if (_selectedBranchId == null && _selectedCategory != 'Suntikan Modal') return;
 
     setState(() {
       if (_isIncome) {
+        // [FITUR BARU] Logic Suntikan Modal
         if (_selectedCategory == 'Suntikan Modal' && _userRole == 'owner') {
-          _selectedWalletId = _treasurerWalletId;
+          // Default ke Level 2 (Kas Bendahara) saat Suntikan Modal dipilih pertama kali
+          // User nanti bisa ubah via Radio Button di UI
+          if (_selectedWalletId != _companyWalletId && _selectedWalletId != _treasurerWalletId) {
+            _selectedWalletId = _treasurerWalletId;
+          }
         } else {
           _selectedWalletId = _companyWalletId;
         }
@@ -162,6 +166,17 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     }
   }
 
+  // Helper untuk mendapatkan Nama Cabang dari ID
+  String _getBranchName(String branchId) {
+    switch (branchId) {
+      case 'bst_box': return 'Box Factory';
+      case 'm_alfa': return 'Maint. Alfa';
+      case 'saufa': return 'Saufa Olshop';
+      case 'pusat': return 'Kantor Pusat';
+      default: return 'Cabang Lain';
+    }
+  }
+
   String _getWalletNameDisplay() {
     if (_selectedWalletId == _companyWalletId) return "Uang Perusahaan (Pusat)";
     if (_selectedWalletId == _treasurerWalletId) return "Kas Bendahara Pusat";
@@ -174,6 +189,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
 
   void _calculateTotal() {
     double total = 0;
+    // [FITUR BARU] Hitung total dari input manual jika Suntikan Modal
     if (_isIncome && _selectedCategory == 'Suntikan Modal') {
       total = double.tryParse(_capitalAmountCtrl.text.replaceAll('.', '')) ?? 0;
     } else {
@@ -184,16 +200,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       }
     }
     if (mounted) setState(() => _totalEstimated = total);
-  }
-  String _getBranchName(String? branchId) {
-    if (branchId == null) return 'Pusat';
-    switch (branchId) {
-      case 'bst_box': return 'Box Factory';
-      case 'm_alfa': return 'Maint. Alfa';
-      case 'saufa': return 'Saufa Olshop';
-      case 'pusat': return 'Kantor Pusat';
-      default: return 'Cabang Lain';
-    }
   }
 
   Future<void> _submitTransaction() async {
@@ -208,11 +214,18 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     try {
       final user = FirebaseAuth.instance.currentUser;
 
-      // 1. SIAPKAN DESKRIPSI
+      bool isSuntikModal = _isIncome && _selectedCategory == 'Suntikan Modal';
+
       String description = "";
-      if (_isIncome && _selectedCategory == 'Suntikan Modal') {
-        description = "Suntikan Modal";
+      String mainItemName = "";
+
+      if (isSuntikModal) {
+        description = "Suntikan Modal (Ke: ${_selectedWalletId == _companyWalletId ? 'Uang Perusahaan' : 'Kas Bendahara'})";
+        mainItemName = "Suntikan Modal";
       } else {
+        mainItemName = _items.isNotEmpty ? _items.first.name.text : "Barang";
+        if (_items.length > 1) mainItemName += " (+${_items.length - 1} lainnya)";
+
         description = _items.map((e) {
           String priceFmt = NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0).format(double.tryParse(e.price.text.replaceAll('.', '')) ?? 0);
           return "${e.name.text} (${e.qty.text} ${e.unit.text} @ $priceFmt)";
@@ -220,44 +233,28 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         if (widget.transactionToEdit == null) description += " (Oleh: $_userName)";
       }
 
-      // 2. KATEGORI FINAL
       String finalCategory = _selectedCategory ?? 'Umum';
       if (finalCategory == 'Lainnya' && _customCategoryCtrl.text.isNotEmpty) {
         finalCategory = _customCategoryCtrl.text;
       }
 
-      // ============================================================
-      // [FIX KRITIKAL] LOGIKA DETEKSI APPROVAL YANG LEBIH KETAT
-      // ============================================================
+      // [FIX] Jika Suntikan Modal -> Set Branch ke 'pusat' agar tidak masuk laporan cabang
+      String? finalBranchId = isSuntikModal ? 'pusat' : _selectedBranchId;
 
-      // Cek 1: Apakah Pengeluaran?
-      bool isExpense = !_isIncome;
+      // CEK APAKAH PERLU APPROVAL?
+      // Logika: User bukan Owner DAN Dompet tujuannya adalah Kas Pusat (dan bukan Pemasukan)
+      bool needsApproval = _userRole != 'owner' &&
+          !_isIncome &&
+          (_selectedWalletId == _companyWalletId || _selectedWalletId == _treasurerWalletId);
 
-      // Cek 2: Apakah User adalah Admin Cabang (Bukan Owner)?
-      bool isAdminBranch = _userRole != 'owner';
-
-      // Cek 3: Apakah Kategori WAJIB Approval? (Semua kecuali 'Harian')
-      bool isRestrictedCategory = finalCategory != 'Harian';
-
-      // KEPUTUSAN FINAL:
-      bool needsApproval = isAdminBranch && isExpense && isRestrictedCategory;
-
-      // Debugging Print (Cek di Run tab jika masih lolos)
-      print("DEBUG APPROVAL -> Role: $_userRole | Kat: $finalCategory | NeedsApproval: $needsApproval");
-
-      // --- JALUR A: WAJIB APPROVAL ---
+      // --- JALUR A: BUTUH APPROVAL ---
       if (needsApproval) {
-        // Pastikan target wallet diset ke Pusat jika logic UI meleset
-        String targetWallet = _selectedWalletId ?? _treasurerWalletId;
-        // Jika masih nyangkut di petty cash, paksa ke treasurer
-        if (targetWallet.startsWith('petty_')) targetWallet = _treasurerWalletId;
-
         final newRequest = RequestModel(
-          id: '',
+          id: '', // Auto ID
           amount: _totalEstimated,
           category: finalCategory,
           description: description,
-          targetWalletId: targetWallet,
+          targetWalletId: _selectedWalletId!,
           requesterId: user?.uid ?? 'unknown',
           requesterName: _userName,
           branchId: _userBranchId,
@@ -266,23 +263,20 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           createdAt: DateTime.now(),
         );
 
-        // Kirim ke Repository (Otomatis kirim notifikasi juga)
         await RequestRepository().createRequest(newRequest);
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text("✋ Permintaan Dana TERKIRIM ke Pusat (Menunggu Persetujuan)"),
+            content: Text("Permintaan dana terkirim ke Pusat (Menunggu Approval)"),
             backgroundColor: Colors.orange,
-            duration: Duration(seconds: 4),
           ));
           Navigator.pop(context);
         }
-      }
 
-      // --- JALUR B: LANGSUNG EKSEKUSI (Harian / Pemasukan / Owner) ---
-      else {
+      } else {
+        // --- JALUR B: LANGSUNG SUKSES ---
         TransactionModel newTx = TransactionModel(
-          id: widget.transactionToEdit?.id ?? '',
+          id: widget.transactionToEdit?.id ?? '', // ID Lama jika edit
           amount: _totalEstimated,
           type: _isIncome ? 'income' : 'expense',
           category: finalCategory,
@@ -290,7 +284,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           walletId: _selectedWalletId!,
           date: _selectedDate,
           userId: user?.uid ?? 'unknown',
-          relatedBranchId: _selectedBranchId,
+          relatedBranchId: finalBranchId,
           status: 'success',
           createdAt: widget.transactionToEdit?.createdAt ?? DateTime.now(),
           deletedAt: null,
@@ -306,7 +300,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text(widget.transactionToEdit == null ? "✅ Transaksi Berhasil Disimpan!" : "✅ Perubahan Disimpan!"),
+              content: Text(widget.transactionToEdit == null ? "Transaksi Berhasil!" : "Perubahan Disimpan!"),
               backgroundColor: Colors.green
           ));
           Navigator.pop(context);
@@ -319,12 +313,14 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       if (mounted) setState(() => _isLoading = false);
     }
   }
+
   void _addItem() => setState(() => _items.add(_ItemController()));
 
   // ==================== UI WIDGETS ====================
 
   @override
   Widget build(BuildContext context) {
+    // [FITUR BARU] Cek Kondisi Suntikan Modal
     bool isSuntikModal = _isIncome && _selectedCategory == 'Suntikan Modal';
     String title = widget.transactionToEdit == null ? "Catat Transaksi" : "Edit Transaksi";
 
@@ -346,7 +342,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                 key: _formKey,
                 child: Column(
                   children: [
-                    // Toggle Income/Expense (Hanya jika tambah baru)
                     if (widget.transactionToEdit == null) _buildModernToggle(),
                     const SizedBox(height: 24),
                     _buildFormCard(isSuntikModal),
@@ -404,7 +399,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 15, offset: const Offset(0, 5))]),
       child: Column(
         children: [
-          // Tanggal
           InkWell(
             onTap: () async {
               final picked = await showDatePicker(context: context, initialDate: _selectedDate, firstDate: DateTime(2020), lastDate: DateTime(2030));
@@ -418,12 +412,10 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           ),
           const SizedBox(height: 20),
 
-          // [FIX] DROPDOWNS (DENGAN OVERFLOW PROTECTION)
           _buildDropdowns(isSuntikModal),
 
           const SizedBox(height: 20),
 
-          // Wallet Info
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(12),
@@ -440,14 +432,15 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           ),
           const SizedBox(height: 20),
 
+          // [FITUR BARU] Switch Form berdasarkan Kategori
           if (isSuntikModal) _buildSuntikModalForm() else _buildItemList(),
         ],
       ),
     );
   }
 
-  // [FIX UTAMA] Dropdown dengan isExpanded & Ellipsis
   Widget _buildDropdowns(bool isSuntikModal) {
+    // Sembunyikan dropdown cabang jika Suntikan Modal (Karena pasti ke Pusat)
     bool showBranchDropdown = _userRole == 'owner' && !isSuntikModal;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -471,14 +464,14 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           const SizedBox(width: 12),
         ],
         Expanded(
-          flex: showBranchDropdown ? 6 : 1, // Jika tidak ada cabang, ambil full width
+          flex: showBranchDropdown ? 6 : 1, // Full width jika cabang hidden
           child: _modernDropdown(
               label: "Kategori",
               value: _selectedCategory,
               items: (_isIncome ? _incomeCategories : _expenseCategories).map((c) =>
                   DropdownMenuItem(
                       value: c,
-                      child: Text(c, overflow: TextOverflow.ellipsis) // [FIX] Text overflow
+                      child: Text(c, overflow: TextOverflow.ellipsis)
                   )
               ).toList(),
               onChanged: (val) {
@@ -490,7 +483,59 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     );
   }
 
-  // [FIX UTAMA] Helper Dropdown
+  // [FITUR BARU] Form Khusus Suntikan Modal (Tanpa detail item)
+  Widget _buildSuntikModalForm() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text("Target Suntikan Modal", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+        const SizedBox(height: 8),
+        // Pilihan Wallet Tujuan
+        Row(
+          children: [
+            Expanded(child: _buildRadioOption("Uang Perusahaan (L1)", _companyWalletId)),
+            const SizedBox(width: 10),
+            Expanded(child: _buildRadioOption("Kas Bendahara (L2)", _treasurerWalletId)),
+          ],
+        ),
+        const SizedBox(height: 20),
+        // Input Nominal Langsung
+        TextFormField(
+          controller: _capitalAmountCtrl,
+          keyboardType: TextInputType.number,
+          inputFormatters: [CurrencyInputFormatter()],
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          decoration: const InputDecoration(
+              labelText: "Nominal Modal",
+              prefixText: "Rp ",
+              border: OutlineInputBorder(),
+              filled: true,
+              fillColor: Colors.white
+          ),
+          onChanged: (_) => _calculateTotal(),
+          validator: (v) => v!.isEmpty ? "Wajib diisi" : null,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRadioOption(String label, String walletId) {
+    bool selected = _selectedWalletId == walletId;
+    return GestureDetector(
+      onTap: () => setState(() => _selectedWalletId = walletId),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        decoration: BoxDecoration(
+            border: Border.all(color: selected ? AppColors.primary : Colors.grey.shade300, width: selected ? 2 : 1),
+            borderRadius: BorderRadius.circular(10),
+            color: selected ? AppColors.primary.withOpacity(0.05) : Colors.transparent
+        ),
+        child: Text(label, textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: selected ? FontWeight.bold : FontWeight.normal, color: selected ? AppColors.primary : Colors.black)),
+      ),
+    );
+  }
+
   Widget _modernDropdown({
     required String label,
     required String? value,
@@ -498,7 +543,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     required Function(String?) onChanged
   }) {
     return DropdownButtonFormField<String>(
-      isExpanded: true, // [FIX] Agar mematuhi lebar Expanded
+      isExpanded: true,
       decoration: InputDecoration(
         labelText: label,
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -511,7 +556,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         return items.map<Widget>((DropdownMenuItem<String> item) {
           return Text(
             item.value ?? '',
-            overflow: TextOverflow.ellipsis, // [FIX] Cut text kalau kepanjangan
+            overflow: TextOverflow.ellipsis,
             maxLines: 1,
           );
         }).toList();
@@ -524,7 +569,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         children: [
           ListView.separated(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), itemCount: _items.length, separatorBuilder: (c, i) => const Divider(), itemBuilder: (context, index) => _buildItemRow(index)),
           const SizedBox(height: 10),
-          if (widget.transactionToEdit == null) // Hide add item saat edit
+          if (widget.transactionToEdit == null)
             TextButton.icon(onPressed: _addItem, icon: const Icon(Icons.add), label: const Text("Tambah Item"))
         ]
     );
@@ -533,18 +578,17 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   Widget _buildItemRow(int index) {
     final item = _items[index];
     return Column(
+      key: item.key, // Gunakan key agar aman saat rebuild
       children: [
-        TextFormField(controller: item.name, decoration: const InputDecoration(labelText: "Nama Item / Deskripsi")),
+        TextFormField(controller: item.name, decoration: const InputDecoration(labelText: "Nama Item / Deskripsi", isDense: true), validator: (v) => v!.isEmpty ? "Wajib" : null),
         Row(children: [
-          Expanded(child: TextFormField(controller: item.price, decoration: const InputDecoration(labelText: "Harga"), keyboardType: TextInputType.number, inputFormatters: [CurrencyInputFormatter()], onChanged: (_) => _calculateTotal())),
+          Expanded(child: TextFormField(controller: item.price, decoration: const InputDecoration(labelText: "Harga"), keyboardType: TextInputType.number, inputFormatters: [CurrencyInputFormatter()], onChanged: (_) => _calculateTotal(), validator: (v) => v!.isEmpty ? "Wajib" : null)),
           const SizedBox(width: 10),
           Expanded(child: TextFormField(controller: item.qty, decoration: const InputDecoration(labelText: "Qty"), keyboardType: TextInputType.number, onChanged: (_) => _calculateTotal())),
         ])
       ],
     );
   }
-
-  Widget _buildSuntikModalForm() { return TextFormField(controller: _capitalAmountCtrl, keyboardType: TextInputType.number, inputFormatters: [CurrencyInputFormatter()], onChanged: (_) => _calculateTotal(), decoration: const InputDecoration(labelText: "Nominal Modal")); }
 
   Widget _buildBottomActionBar() {
     return Container(
